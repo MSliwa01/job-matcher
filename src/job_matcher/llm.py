@@ -5,7 +5,7 @@ compatibility endpoint, or a local server (Ollama, vLLM). The default here is Ge
 a pool of keys rotated on rate limits, so the whole project runs at no cost.
 
 Configuration (environment or .env):
-  JM_LLM            gemini (default) | openai | local | claude-cli
+  JM_LLM            claude-cli (default) | gemini | openai | local
                     claude-cli runs `claude -p` on the user's own subscription: local use only, never
                     behind a deployed service.
   JM_LLM_MODEL      model name, e.g. gemini-3.5-flash-lite, gpt-5-mini
@@ -68,7 +68,7 @@ class Usage:
 class ChatModel:
     def __init__(self, provider: str | None = None, model: str | None = None):
         load_dotenv()
-        self.provider = provider or os.environ.get("JM_LLM", "gemini")
+        self.provider = provider or os.environ.get("JM_LLM", "claude-cli")
         if self.provider == "gemini":
             keys = gemini_keys()
             if not keys:

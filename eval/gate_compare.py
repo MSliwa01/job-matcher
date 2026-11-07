@@ -14,7 +14,7 @@ from job_matcher import db, gate
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--labels", type=Path, default=Path("data/labels.jsonl"))
-    p.add_argument("--extractor", default="gemini:gemini-3.5-flash-lite")
+    p.add_argument("--extractor", default="claude-cli:haiku")
     p.add_argument("--sample", type=int, default=25)
     a = p.parse_args()
 

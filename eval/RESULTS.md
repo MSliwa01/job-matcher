@@ -141,9 +141,47 @@ Takeaways for the design: Flash Lite is good enough to extract fields from an ad
 judge fit (it invents quotes); a small Claude model judges well at about a third of a cent per ad; and
 the scorer should be fused with retrieval, not replace it.
 
+## Round 4: Haiku for everything, and the whole funnel
+
+Gemini's free tier gave about six calls a minute and judged poorly, so the default model is now Claude
+Haiku through the subscription CLI (`claude -p --json-schema`). Extraction of all 1,266 ads with text took
+16 minutes with six processes, with no failures (Gemini: 557 ads in two hours, with failures).
+
+Haiku as the gate's extractor removes 548 offers (Gemini 238 of 542, regex 522 of 1,274) and one applied
+offer: a senior-flavoured mobile role at a large AI company, read as senior from "highly self-directed".
+It infers level from tone more readily than Gemini did.
+
+### The funnel over all 1,532 offers
+
+Retrieval (vector, both CVs) and the gate first; Haiku v2 then scores the top N; the rest keep their
+retrieval order.
+
+| ranking | R@20 | R@50 | R@100 | R@200 | nDCG@100 | Haiku calls |
+|---|---|---|---|---|---|---|
+| retrieval + gate | 0.052 | 0.167 | 0.323 | 0.562 | 0.250 | 0 |
+| score top 50 | 0.135 | 0.167 | 0.323 | 0.562 | 0.336 | 50 |
+| score top 150 | 0.094 | 0.281 | 0.396 | 0.562 | 0.382 | 150 |
+| score top 200 | 0.104 | 0.281 | 0.500 | 0.562 | 0.435 | 200 |
+| **score top 300** | 0.125 | **0.292** | **0.562** | 0.750 | **0.486** | 300 |
+| score top 500 | 0.135 | 0.271 | 0.521 | 0.812 | 0.480 | 500 |
+| score everything that passes the gate (878) | 0.125 | 0.260 | 0.479 | 0.760 | 0.453 | 878 |
+| RRF(retrieval, score), top 300 | 0.115 | 0.250 | 0.448 | 0.740 | 0.421 | 300 |
+
+Scoring the top 300 doubles nDCG over retrieval alone. API-equivalent cost: about $0.30 per 100 ads
+(scoring), about $0.13 per 100 (extraction); on the subscription both are free.
+
+**Scoring everything is worse than scoring the top 300.** Retrieval does more than save calls: offers far
+from the candidate's direction can still score well on generic requirements (Python, Git, English), and the
+retrieval cut keeps them out. The best setting uses about a third of the calls of the brute-force one.
+
+**Fusion helps on the judged pool and hurts on the full one.** In the judged pool every offer was
+plausible, so the two signals were close in strength and complemented each other (AUC 0.851). Over all
+offers the retrieval order below the top is noisy and fusing it back in dilutes the scorer. The ranking
+in the product is therefore: gate, retrieval cut at 300, then the score.
+
 ## Next
 
 - Recall for the funnel: union of CV-vector and keyword candidates at a fixed budget (100, 200, 300).
-- Full funnel over all offers: retrieval + gate, Haiku v2 on the top 150, fused ranking.
-- Prompt v2 on Gemini when the daily quota resets, to separate the prompt from the model.
-- Finish extracting the remaining ads (rate-limited, overnight).
+- A ranking command (`jm rank`) that runs the chosen funnel on new offers and prints a short list with reasons.
+- Agent with tools and an MCP server over the database.
+- FastAPI + web page with precomputed results and live vector search; Docker; Azure and AWS with Terraform.

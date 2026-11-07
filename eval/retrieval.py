@@ -89,7 +89,7 @@ def main() -> None:
     p.add_argument("--pool", type=Path, help="restrict ranking to these offer ids (one per line): offers the "
                    "author reviewed, so every unlabelled one is a real 'no'")
     p.add_argument("--embedder", default=None)
-    p.add_argument("--extractor", default="gemini:gemini-3.5-flash-lite")
+    p.add_argument("--extractor", default="claude-cli:haiku")
     p.add_argument("--only", nargs="*", help="run only experiments whose name contains one of these")
     p.add_argument("--json", type=Path, help="also write results here")
     a = p.parse_args()
