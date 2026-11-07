@@ -96,8 +96,54 @@ Excluding role families did not help: vector search already ranks sales and desi
 rule mostly removes offers that were not near the top anyway (and one applied offer). The gate's value is
 level and years.
 
+## Round 3: LLM scoring with checked quotes
+
+The scorer (`score.py`) asks the model to judge each requirement of the ad as met, partial or missing and
+to quote the candidate's evidence word for word. Code then checks every quote against the evidence file:
+a "met" without a real quote drops to "partial", a "partial" without one to "missing", a quote from
+coursework counts as "partial" at most. Code computes the score (70 must-haves, 15 nice-to-haves, 10 level,
+5 domain, dealbreaker caps at 40), the same formula as the earlier judging script, so the two compare.
+Evidence: about 15k tokens per call.
+
+| scorer on the judged pool (102 offers, 53 applied) | AUC | R@20 | nDCG@100 | quotes not found | cost per 100 ads |
+|---|---|---|---|---|---|
+| Gemini 3.5 Flash Lite, prompt v1 (78 scored, rest hit the daily limit) | 0.589 | 0.263 | 0.669 | 30% | free tier |
+| Claude Haiku via subscription CLI, prompt v1 | 0.738 | 0.321 | 0.733 | 7% | $0.31 API-equivalent |
+| Claude Haiku, prompt v2 | 0.807 | 0.346 | 0.786 | 7% | $0.34 API-equivalent |
+| earlier judging pipeline (reference, inflated) | 0.863 | 0.377 | 0.829 | | |
+
+What changed from v1 to v2, found by reading the largest disagreements with the reference:
+
+- **An empty ad scored 93.** One ad's text was just "xx"; the model invented requirements and met them.
+  Ads under 300 characters are now skipped and reported, never scored.
+- **Dealbreakers were miscalibrated.** v1 capped an offer at 40 for one missing required skill (Java in a
+  Python-and-Java QA role), while the author applied to such roles: juniors get hired with gaps. v2 defines
+  a dealbreaker as one of four things: above entry level, a main stack the evidence never shows, a foreign
+  core domain, or a legal or language requirement.
+
+v2 was written after looking at this pool, so its gain is optimistic; the next labelled offers are the
+real test.
+
+### Combining retrieval with the scorer
+
+| judged pool | AUC | R@20 | R@50 | nDCG@100 |
+|---|---|---|---|---|
+| vector + LLM gate | 0.785 | 0.264 | 0.717 | 0.727 |
+| Haiku v2 score | 0.796 | 0.340 | 0.698 | 0.777 |
+| **RRF(vector, Haiku v2)** | **0.851** | 0.340 | 0.755 | 0.792 |
+
+The two signals are complementary. Embeddings say whether an offer is in the candidate's direction;
+the scorer says whether the candidate meets its requirements. Fused, they come within about 0.01 AUC of the
+reference judge, which needed a stronger model per ad and whose number is inflated by the selection bias
+described above.
+
+Takeaways for the design: Flash Lite is good enough to extract fields from an ad and not good enough to
+judge fit (it invents quotes); a small Claude model judges well at about a third of a cent per ad; and
+the scorer should be fused with retrieval, not replace it.
+
 ## Next
 
 - Recall for the funnel: union of CV-vector and keyword candidates at a fixed budget (100, 200, 300).
-- LLM scoring with quoted evidence on the funnel's candidates (reusing the requirement-weight scheme of the earlier judge, AUC 0.86), Gemini vs. a subscription CLI.
+- Full funnel over all offers: retrieval + gate, Haiku v2 on the top 150, fused ranking.
+- Prompt v2 on Gemini when the daily quota resets, to separate the prompt from the model.
 - Finish extracting the remaining ads (rate-limited, overnight).

@@ -5,7 +5,9 @@ compatibility endpoint, or a local server (Ollama, vLLM). The default here is Ge
 a pool of keys rotated on rate limits, so the whole project runs at no cost.
 
 Configuration (environment or .env):
-  JM_LLM            gemini (default) | openai | local
+  JM_LLM            gemini (default) | openai | local | claude-cli
+                    claude-cli runs `claude -p` on the user's own subscription: local use only, never
+                    behind a deployed service.
   JM_LLM_MODEL      model name, e.g. gemini-3.5-flash-lite, gpt-5-mini
   GEMINI_API_KEYS   comma-separated keys, or GEMINI_KEYS_FILE pointing at a file that defines them
   OPENAI_API_KEY    for JM_LLM=openai
@@ -13,7 +15,9 @@ Configuration (environment or .env):
 """
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -50,6 +54,7 @@ class Usage:
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    api_equivalent_usd: float = 0.0  # what the CLI reports the same calls would cost on the API
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add(self, u) -> None:
@@ -73,6 +78,9 @@ class ChatModel:
         elif self.provider == "openai":
             self.clients = [openai.OpenAI(max_retries=0, timeout=90)]
             self.model = model or os.environ.get("JM_LLM_MODEL", "gpt-5-mini")
+        elif self.provider == "claude-cli":
+            self.clients = [None] * int(os.environ.get("JM_CLI_PARALLEL", "4"))
+            self.model = model or os.environ.get("JM_LLM_MODEL", "haiku")
         elif self.provider == "local":
             url = os.environ.get("JM_LOCAL_URL", "http://localhost:11434/v1")
             self.clients = [openai.OpenAI(api_key="local", base_url=url, max_retries=0, timeout=90)]
@@ -102,8 +110,33 @@ class ChatModel:
         with self._lock:
             self._free_at[i] = max(self._free_at[i], time.monotonic() + seconds)
 
+    def _parse_cli(self, system: str, user: str, schema: type[T], attempts: int = 3) -> T:
+        cmd = ["claude", "-p", "--model", self.model, "--system-prompt", system,
+               "--json-schema", json.dumps(schema.model_json_schema()), "--output-format", "json",
+               "--tools", "", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config"]
+        last: Exception | None = None
+        for _ in range(attempts):
+            try:
+                out = subprocess.run(cmd, input=user, capture_output=True, text=True, timeout=300, check=True)
+                d = json.loads(out.stdout)
+                if d.get("is_error") or d.get("structured_output") is None:
+                    raise ValueError(str(d.get("result"))[:200])
+                with self.usage.lock:
+                    self.usage.calls += 1
+                    u = d.get("usage") or {}
+                    self.usage.input_tokens += (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0) \
+                        + (u.get("cache_creation_input_tokens") or 0)
+                    self.usage.output_tokens += u.get("output_tokens") or 0
+                    self.usage.api_equivalent_usd += d.get("total_cost_usd") or 0
+                return schema.model_validate(d["structured_output"])
+            except (subprocess.SubprocessError, ValueError, json.JSONDecodeError) as e:
+                last = e
+        raise RuntimeError(f"{self.name} failed after {attempts} attempts: {last}")
+
     def parse(self, system: str, user: str, schema: type[T], attempts: int = 8) -> T:
         """Structured output: the reply is validated against a Pydantic model."""
+        if self.provider == "claude-cli":
+            return self._parse_cli(system, user, schema)
         last: Exception | None = None
         for _ in range(attempts):
             i = self._acquire()
