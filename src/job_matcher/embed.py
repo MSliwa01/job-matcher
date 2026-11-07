@@ -12,20 +12,28 @@ class Embedder(Protocol):
 
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
+    def embed_query(self, text: str) -> list[float]: ...
+
 
 class LocalEmbedder:
     """BAAI/bge-m3 through sentence-transformers. Free, multilingual, 1024 dimensions."""
 
-    def __init__(self, model: str = "BAAI/bge-m3", max_tokens: int = 512):
+    def __init__(self, model: str = "BAAI/bge-m3", max_tokens: int = 512, query_max_tokens: int = 2048):
         from sentence_transformers import SentenceTransformer
 
         self.name = f"local:{model}"
         self.model = SentenceTransformer(model)
-        self.model.max_seq_length = max_tokens
+        self.max_tokens, self.query_max_tokens = max_tokens, query_max_tokens
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self.model.max_seq_length = self.max_tokens
         return self.model.encode(texts, batch_size=16, normalize_embeddings=True,
                                  show_progress_bar=len(texts) > 64).tolist()
+
+    def embed_query(self, text: str) -> list[float]:
+        """A CV is longer than an ad's useful head, so the query gets a longer window."""
+        self.model.max_seq_length = self.query_max_tokens
+        return self.model.encode([text], normalize_embeddings=True).tolist()[0]
 
 
 class OpenAIEmbedder:
@@ -42,6 +50,9 @@ class OpenAIEmbedder:
             resp = self.client.embeddings.create(model=self.model, input=texts[i:i + 256])
             out.extend(d.embedding for d in resp.data)
         return out
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
 
 
 def get_embedder(spec: str | None = None) -> Embedder:

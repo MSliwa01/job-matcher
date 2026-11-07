@@ -6,7 +6,11 @@ import numpy as np
 RRF_K = 60  # standard constant from Cormack et al. (2009); damps the weight of top ranks
 
 
-def fulltext(conn, query: str, limit: int = 50, open_only: bool = True) -> list[str]:
+# ts_rank_cd normalisation: 1 divides by 1 + log(document length), so long ads stop winning on volume.
+FT_NORM = 1
+
+
+def fulltext(conn, query: str, limit: int = 50, open_only: bool = True, norm: int = FT_NORM) -> list[str]:
     """OR over the query's terms, ranked by ts_rank_cd. Works for a short question and for a whole CV,
     where an AND query would match nothing."""
     terms = conn.execute(
@@ -19,14 +23,14 @@ def fulltext(conn, query: str, limit: int = 50, open_only: bool = True) -> list[
     rows = conn.execute(
         f"""SELECT id FROM offers, to_tsquery('simple', %s) q
             WHERE tsv @@ q {"AND NOT closed" if open_only else ""}
-            ORDER BY ts_rank_cd(tsv, q, 32) DESC LIMIT %s""",
-        (tsq, limit),
+            ORDER BY ts_rank_cd(tsv, q, %s) DESC LIMIT %s""",
+        (tsq, norm, limit),
     ).fetchall()
     return [r[0] for r in rows]
 
 
 def vector(conn, embedder, query: str, limit: int = 50, open_only: bool = True) -> list[str]:
-    q = np.asarray(embedder.embed([query])[0], dtype=np.float32)
+    q = np.asarray(embedder.embed_query(query), dtype=np.float32)
     rows = conn.execute(
         f"""SELECT e.offer_id FROM embeddings e JOIN offers o ON o.id = e.offer_id
             WHERE e.model = %s {"AND NOT o.closed" if open_only else ""}
