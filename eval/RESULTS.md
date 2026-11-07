@@ -65,6 +65,37 @@ The LLM judge's number is inflated: the author chose from its ranking, so the la
   diacritics.
 - "bez rozmowy" ("without an interview") matched the interview pattern and promoted a rejection to grade 3.
 
+## Round 2: LLM extraction as the gate
+
+Extraction runs through the OpenAI SDK against Gemini's OpenAI-compatible endpoint
+(`gemini-3.5-flash-lite`, free tier, structured output validated by Pydantic). Each ad gives its level,
+the smallest years requirement, role family, required skills and languages, with a verbatim quote for
+the level and the years. 557 of 1,274 ads with text are extracted so far (the free tier allows about six
+ads a minute across the key pool); offers without an extraction fall back to the regex gate.
+
+| gate (on 542 extracted offers, 85 applied) | removes | applied offers removed |
+|---|---|---|
+| regex: title words + "N+ years" | 242 | 0 |
+| LLM extraction, first version | 251 | 1 ("Junior / Mid" read as mid) |
+| LLM extraction + two rules (range = lowest level; mid asking ≤ 2 years = junior) | 238 | 0 |
+
+The two gates disagree on about 70 offers. The LLM catches what patterns cannot ("Software Engineer II",
+"approx. 2 years", "a small, senior team", Polish "3-letnie doświadczenie"); the regex removes junior roles
+for a word ("Junior Product Manager" for "manager"). The fix for the LLM's one miss is deterministic and
+covered by tests, so it costs no new calls. One trap found on the way: a duty such as "mentor a junior
+engineer" contains "junior" but describes a senior role, so the range rule reads only the title and
+explicit ranges.
+
+| judged pool (102) | AUC | nDCG@100 |
+|---|---|---|
+| vector + regex gate | 0.769 | 0.715 |
+| vector + LLM gate | **0.785** | 0.727 |
+| + excluding sales and design roles | 0.767 | 0.717 |
+
+Excluding role families did not help: vector search already ranks sales and design ads low, so the extra
+rule mostly removes offers that were not near the top anyway (and one applied offer). The gate's value is
+level and years.
+
 ## Next
 
 - Recall for the funnel: union of CV-vector and keyword candidates at a fixed budget (100, 200, 300).

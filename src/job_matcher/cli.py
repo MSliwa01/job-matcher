@@ -15,6 +15,10 @@ def main() -> None:
     sub.add_parser("stats", help="row counts")
     pe = sub.add_parser("embed", help="embed offers that have no vector for this model yet")
     pe.add_argument("--embedder", default=None, help="local (default) or openai")
+    px = sub.add_parser("extract", help="LLM extraction for offers that have none from this model yet")
+    px.add_argument("--provider", default=None, help="gemini (default), openai, local")
+    px.add_argument("--model", default=None)
+    px.add_argument("--workers", type=int, default=8)
     ps = sub.add_parser("search", help="search open offers")
     ps.add_argument("query", nargs="?", help="question or keywords")
     ps.add_argument("--cv", type=Path, help="use a CV file (text or Markdown) as the query")
@@ -45,6 +49,16 @@ def main() -> None:
         emb = get_embedder(a.embedder)
         n = embed_offers(conn, emb)
         print(f"embedded {n} offers with {emb.name} in {time.time() - t0:.0f}s")
+    elif a.cmd == "extract":
+        from job_matcher.extract import extract_offers
+        from job_matcher.llm import ChatModel
+
+        m = ChatModel(a.provider, a.model)
+        t0 = time.time()
+        done, failed = extract_offers(conn, m, workers=a.workers)
+        u = m.usage
+        print(f"{m.name}: {done} extracted, {failed} failed, {time.time() - t0:.0f}s, "
+              f"{u.calls} calls, {u.input_tokens} input + {u.output_tokens} output tokens")
     elif a.cmd == "search":
         query = a.cv.read_text() if a.cv else a.query
         if not query:

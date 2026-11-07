@@ -43,6 +43,11 @@ EXPERIMENTS = [
     Exp("vector + gate", "vector", gate="seniority"),
     Exp("hybrid + gate", "hybrid", gate="seniority"),
     Exp("hybrid + gate + location", "hybrid", gate="seniority+location"),
+    Exp("vector + LLM gate", "vector", gate="llm"),
+    Exp("vector + LLM gate + roles", "vector", gate="llm+roles"),
+    Exp("vector + LLM gate + roles+biz", "vector", gate="llm+roles+biz"),
+    Exp("lanes: vector + LLM gate", "vector", gate="llm", queries="lanes"),
+    Exp("CV+lanes: vector + LLM gate", "vector", gate="llm", queries="cv+lanes"),
     Exp("lanes: fulltext + gate", "fulltext", gate="seniority", queries="lanes"),
     Exp("lanes: vector + gate", "vector", gate="seniority", queries="lanes"),
     Exp("lanes: hybrid + gate", "hybrid", gate="seniority", queries="lanes"),
@@ -84,6 +89,7 @@ def main() -> None:
     p.add_argument("--pool", type=Path, help="restrict ranking to these offer ids (one per line): offers the "
                    "author reviewed, so every unlabelled one is a real 'no'")
     p.add_argument("--embedder", default=None)
+    p.add_argument("--extractor", default="gemini:gemini-3.5-flash-lite")
     p.add_argument("--only", nargs="*", help="run only experiments whose name contains one of these")
     p.add_argument("--json", type=Path, help="also write results here")
     a = p.parse_args()
@@ -116,7 +122,13 @@ def main() -> None:
             cache[key] = r + [o for o in all_ids if o not in seen]  # unmatched offers go last
         return cache[key]
 
-    rules = {"seniority": gate.Rules(), "seniority+location": gate.Rules(cities=CITIES)}
+    rules = {"seniority": gate.Rules(), "seniority+location": gate.Rules(cities=CITIES),
+             "llm": gate.Rules(extractor=a.extractor),
+             # role families the author excluded up front in the fetcher config (sales, design)
+             "llm+roles": gate.Rules(extractor=a.extractor, exclude_families=("sales_marketing", "product_design")),
+             # what-if: also business roles, which the author never excluded explicitly
+             "llm+roles+biz": gate.Rules(extractor=a.extractor,
+                                         exclude_families=("sales_marketing", "product_design", "other_business"))}
     results = {"random": {f"R@{k}": min(1.0, k / (len(pool) if pool else n)) for k in KS} | ({"AUC": 0.5} if pool else {})}
     for e in EXPERIMENTS:
         if a.only and not any(s in e.name for s in a.only) or (e.queries != "cv" and not lanes):
