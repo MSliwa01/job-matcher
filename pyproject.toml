@@ -16,3 +16,15 @@ jm = "job_matcher.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+local = ["sentence-transformers>=3", "torch>=2.6"]
+openai = ["openai>=1.60"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
