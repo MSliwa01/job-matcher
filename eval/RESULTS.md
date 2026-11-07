@@ -99,5 +99,5 @@ level and years.
 ## Next
 
 - Recall for the funnel: union of CV-vector and keyword candidates at a fixed budget (100, 200, 300).
-- LLM extraction of level, years and role family to replace the regex gate, measured against it.
-- LLM scoring on the funnel's candidates; compare the API model with the free local mode.
+- LLM scoring with quoted evidence on the funnel's candidates (reusing the requirement-weight scheme of the earlier judge, AUC 0.86), Gemini vs. a subscription CLI.
+- Finish extracting the remaining ads (rate-limited, overnight).
