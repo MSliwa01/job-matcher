@@ -1,7 +1,7 @@
 # The demo on AWS Lambda behind a function URL. The image is the same one Azure runs; the Lambda Web
 # Adapter extension inside it turns invocations into HTTP requests to uvicorn. Lambda's always-free tier
-# (1 million requests, 400,000 GB-seconds a month) covers a demo. ECR storage for one ~530 MB image costs
-# about $0.05 a month.
+# (1 million requests, 400,000 GB-seconds a month) covers a demo. ECR storage for two ~530 MB images costs
+# about $0.10 a month.
 #
 # Two steps, because Lambda needs the image in ECR before it can be created:
 #   terraform apply -target=aws_ecr_repository.repo
@@ -11,7 +11,8 @@
 terraform {
   required_version = ">= 1.6"
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 6.0" }
+    aws     = { source = "hashicorp/aws", version = "~> 6.0" }
+    archive = { source = "hashicorp/archive", version = "~> 2.7" }
   }
 }
 
@@ -96,6 +97,77 @@ resource "aws_lambda_permission" "invoke" {
   invoked_via_function_url = true
 }
 
+# Cost guard. Budgets only send alerts, so a small function stops the API when the budget is spent:
+# an email at 40% of the budget and on a forecast above it, the kill switch at 100% of actual cost.
+# AWS updates cost data a few times a day, so the stop comes hours after the money is spent, not seconds.
+resource "aws_sns_topic" "budget" {
+  name = "${var.name}-budget"
+}
+
+resource "aws_sns_topic_policy" "budget" {
+  arn = aws_sns_topic.budget.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "budgets.amazonaws.com" }
+      Action    = "SNS:Publish"
+      Resource  = aws_sns_topic.budget.arn
+    }]
+  })
+}
+
+data "archive_file" "kill" {
+  type        = "zip"
+  source_file = "${path.module}/kill.py"
+  output_path = "${path.module}/.build/kill.zip"
+}
+
+resource "aws_iam_role" "kill" {
+  name               = "${var.name}-kill"
+  assume_role_policy = aws_iam_role.lambda.assume_role_policy
+}
+
+resource "aws_iam_role_policy_attachment" "kill_logs" {
+  role       = aws_iam_role.kill.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "kill" {
+  role = aws_iam_role.kill.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "lambda:PutFunctionConcurrency", Resource = aws_lambda_function.api.arn }]
+  })
+}
+
+resource "aws_lambda_function" "kill" {
+  function_name    = "${var.name}-kill"
+  role             = aws_iam_role.kill.arn
+  runtime          = "python3.13"
+  handler          = "kill.handler"
+  filename         = data.archive_file.kill.output_path
+  source_code_hash = data.archive_file.kill.output_base64sha256
+  timeout          = 30
+  environment {
+    variables = { FUNCTION_NAME = aws_lambda_function.api.function_name }
+  }
+}
+
+resource "aws_sns_topic_subscription" "kill" {
+  topic_arn = aws_sns_topic.budget.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.kill.arn
+}
+
+resource "aws_lambda_permission" "sns" {
+  statement_id  = "budget-topic"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.kill.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.budget.arn
+}
+
 resource "aws_budgets_budget" "monthly" {
   name         = "${var.name}-budget"
   budget_type  = "COST"
@@ -105,7 +177,7 @@ resource "aws_budgets_budget" "monthly" {
 
   notification {
     comparison_operator        = "GREATER_THAN"
-    threshold                  = 50
+    threshold                  = 40
     threshold_type             = "PERCENTAGE"
     notification_type          = "ACTUAL"
     subscriber_email_addresses = [var.budget_email]
@@ -118,6 +190,17 @@ resource "aws_budgets_budget" "monthly" {
     notification_type          = "FORECASTED"
     subscriber_email_addresses = [var.budget_email]
   }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_email]
+    subscriber_sns_topic_arns  = [aws_sns_topic.budget.arn]
+  }
+
+  depends_on = [aws_sns_topic_policy.budget]
 }
 
 output "repository_url" {

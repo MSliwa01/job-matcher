@@ -87,10 +87,11 @@ One container image runs on both clouds:
 | compute | Container Apps, scale to zero, at most 1 replica | Lambda with a function URL, 2 GB, reserved concurrency 2 |
 | image | public on GHCR | ECR, two newest images kept |
 | HTTP | the container's port 8080 | Lambda Web Adapter extension forwards to the same port |
-| cost guard | $1 monthly budget with email alerts | $1 monthly budget with email alerts |
+| cost guard | $2.50 monthly budget: email at 40%, a Logic App stops the app at 100% | $2.50 monthly budget: email at 40%, a function sets concurrency to 0 at 100% |
 
-The API also limits requests per address and in total, a cap on the bill if someone floods the
-endpoint.
+Budgets in both clouds only send alerts, so each deployment adds a switch that the budget alert triggers
+and that stops the service. Cost data arrives a few hours late, so the switch limits a runaway bill
+rather than stopping it at the exact amount. The API also limits requests per address and in total.
 
 ```bash
 ./deploy/push.sh ghcr 2026-11-07                      # snapshot, build, push to GHCR

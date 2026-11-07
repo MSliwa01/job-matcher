@@ -64,6 +64,61 @@ resource "azurerm_container_app" "api" {
   }
 }
 
+# Cost guard. Budgets only send alerts, so a Logic App stops the container app when the budget is spent:
+# an email at 40% of the budget and on a forecast above it, the stop at 100% of actual cost. Azure
+# updates cost data a few times a day, so the stop comes hours after the money is spent, not seconds.
+# `az containerapp start` (or `terraform apply` after a new revision) brings it back.
+resource "azurerm_logic_app_workflow" "kill" {
+  name                = "${var.name}-kill"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  identity {
+    type = "SystemAssigned"
+  }
+}
+
+resource "azurerm_logic_app_trigger_http_request" "budget" {
+  name         = "budget-alert"
+  logic_app_id = azurerm_logic_app_workflow.kill.id
+  schema       = "{}"
+}
+
+resource "azurerm_logic_app_action_custom" "stop" {
+  name         = "stop-container-app"
+  logic_app_id = azurerm_logic_app_workflow.kill.id
+  body = jsonencode({
+    type     = "Http"
+    runAfter = {}
+    inputs = {
+      method = "POST"
+      uri    = "https://management.azure.com${azurerm_container_app.api.id}/stop?api-version=2024-03-01"
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://management.azure.com/"
+      }
+    }
+  })
+}
+
+resource "azurerm_role_assignment" "kill" {
+  scope                = azurerm_container_app.api.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_logic_app_workflow.kill.identity[0].principal_id
+}
+
+resource "azurerm_monitor_action_group" "kill" {
+  name                = "${var.name}-kill"
+  resource_group_name = azurerm_resource_group.rg.name
+  short_name          = "jmkill"
+
+  logic_app_receiver {
+    name                    = "stop-app"
+    resource_id             = azurerm_logic_app_workflow.kill.id
+    callback_url            = azurerm_logic_app_trigger_http_request.budget.callback_url
+    use_common_alert_schema = true
+  }
+}
+
 resource "azurerm_consumption_budget_subscription" "budget" {
   name            = "${var.name}-budget"
   subscription_id = "/subscriptions/${var.subscription_id}"
@@ -76,7 +131,7 @@ resource "azurerm_consumption_budget_subscription" "budget" {
 
   notification {
     enabled        = true
-    threshold      = 50
+    threshold      = 40
     operator       = "GreaterThan"
     threshold_type = "Actual"
     contact_emails = [var.budget_email]
@@ -88,6 +143,15 @@ resource "azurerm_consumption_budget_subscription" "budget" {
     operator       = "GreaterThan"
     threshold_type = "Forecasted"
     contact_emails = [var.budget_email]
+  }
+
+  notification {
+    enabled        = true
+    threshold      = 100
+    operator       = "GreaterThan"
+    threshold_type = "Actual"
+    contact_emails = [var.budget_email]
+    contact_groups = [azurerm_monitor_action_group.kill.id]
   }
 
   lifecycle {

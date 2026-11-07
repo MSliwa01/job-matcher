@@ -25,6 +25,7 @@ variable "reserved_concurrency" {
 }
 
 variable "budget_usd" {
-  type    = number
-  default = 1
+  type        = number
+  default     = 2.5
+  description = "Monthly budget (about 10 PLN). Email at 40%, API stopped at 100%."
 }
