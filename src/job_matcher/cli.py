@@ -19,6 +19,19 @@ def main() -> None:
     px.add_argument("--provider", default=None, help="gemini (default), openai, local")
     px.add_argument("--model", default=None)
     px.add_argument("--workers", type=int, default=8)
+    pr = sub.add_parser("rank", help="gate, retrieval cut, LLM score; prints a short list")
+    pr.add_argument("--cv", type=Path, nargs="+", required=True, help="CV text files used as queries")
+    pr.add_argument("--evidence", type=Path, required=True, help="what the candidate has done (quotes count as met)")
+    pr.add_argument("--coursework", type=Path, help="courses (quotes count as partial at most)")
+    pr.add_argument("--excluded", type=Path, help="things not to claim")
+    pr.add_argument("--cities", nargs="*", default=[], help="acceptable cities; remote always passes")
+    pr.add_argument("--since", help="only offers first seen on or after this date (YYYY-MM-DD)")
+    pr.add_argument("--cut", type=int, default=300, help="how many retrieved offers the LLM scores")
+    pr.add_argument("-n", type=int, default=25, help="rows to print")
+    pr.add_argument("--out", type=Path, help="also write the list as Markdown here")
+    pr.add_argument("--provider", default=None)
+    pr.add_argument("--model", default=None)
+    pr.add_argument("--workers", type=int, default=6)
     ps = sub.add_parser("search", help="search open offers")
     ps.add_argument("query", nargs="?", help="question or keywords")
     ps.add_argument("--cv", type=Path, help="use a CV file (text or Markdown) as the query")
@@ -59,6 +72,23 @@ def main() -> None:
         u = m.usage
         print(f"{m.name}: {done} extracted, {failed} failed, {time.time() - t0:.0f}s, "
               f"{u.calls} calls, {u.input_tokens} input + {u.output_tokens} output tokens")
+    elif a.cmd == "rank":
+        from job_matcher.gate import Rules
+        from job_matcher.llm import ChatModel
+        from job_matcher.rank import rank, to_markdown
+        from job_matcher.score import Evidence
+
+        m = ChatModel(a.provider, a.model)
+        ev = Evidence.from_files(a.evidence, a.coursework, a.excluded)
+        items, failed = rank(conn, [c.read_text() for c in a.cv], ev, Rules(cities=a.cities), m,
+                             cut=a.cut, since=a.since, workers=a.workers)
+        md = to_markdown(items, a.n)
+        print(md)
+        u = m.usage
+        print(f"{u.calls} model calls, {u.input_tokens} input + {u.output_tokens} output tokens"
+              + (f", API-equivalent ${u.api_equivalent_usd:.2f}" if u.api_equivalent_usd else ""))
+        if a.out:
+            a.out.write_text(md)
     elif a.cmd == "search":
         query = a.cv.read_text() if a.cv else a.query
         if not query:
