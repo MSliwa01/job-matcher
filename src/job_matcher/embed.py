@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Protocol
 
 MAX_CHARS = 6000  # long ads repeat boilerplate after the first few thousand characters
@@ -36,6 +37,47 @@ class LocalEmbedder:
         return self.model.encode([text], normalize_embeddings=True).tolist()[0]
 
 
+class OnnxEmbedder:
+    """The same bge-m3 as an int8 ONNX model on the CPU, for query embeddings where there is no GPU and
+    no room for torch. Ad vectors stay the fp32 ones from LocalEmbedder; eval/onnx_check.py measures how
+    far int8 queries move the ranking.
+
+    Files: model_int8.onnx and tokenizer.json from huggingface.co/Xenova/bge-m3, in JM_ONNX_DIR."""
+
+    def __init__(self, path: str | None = None, query_max_tokens: int = 2048, threads: int = 0):
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+
+        d = Path(path or os.environ.get("JM_ONNX_DIR", Path.home() / ".cache/jm-models/bge-m3-int8"))
+        self.name = "local:BAAI/bge-m3"  # compatible with the stored fp32 vectors
+        self.query_max_tokens = query_max_tokens
+        self.tok = Tokenizer.from_file(str(d / "tokenizer.json"))
+        opts = ort.SessionOptions()
+        if threads:
+            opts.intra_op_num_threads = threads
+        self.session = ort.InferenceSession(str(d / "model_int8.onnx"), opts, providers=["CPUExecutionProvider"])
+        self.inputs = {i.name for i in self.session.get_inputs()}
+
+    def _encode(self, text: str, max_tokens: int) -> list[float]:
+        import numpy as np
+
+        self.tok.enable_truncation(max_tokens)
+        enc = self.tok.encode(text)
+        feed = {"input_ids": np.array([enc.ids], dtype=np.int64),
+                "attention_mask": np.array([enc.attention_mask], dtype=np.int64)}
+        if "token_type_ids" in self.inputs:
+            feed["token_type_ids"] = np.zeros_like(feed["input_ids"])
+        hidden = self.session.run(None, feed)[0]
+        v = hidden[0, 0]  # bge-m3 dense vectors use the CLS token
+        return (v / np.linalg.norm(v)).astype(np.float32).tolist()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._encode(t, 512) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._encode(text, self.query_max_tokens)
+
+
 class OpenAIEmbedder:
     def __init__(self, model: str = "text-embedding-3-small"):
         from openai import OpenAI
@@ -59,9 +101,11 @@ def get_embedder(spec: str | None = None) -> Embedder:
     spec = spec or os.environ.get("JM_EMBEDDER", "local")
     if spec == "local":
         return LocalEmbedder()
+    if spec == "onnx":
+        return OnnxEmbedder()
     if spec == "openai":
         return OpenAIEmbedder()
-    raise ValueError(f"unknown embedder {spec!r} (local, openai)")
+    raise ValueError(f"unknown embedder {spec!r} (local, onnx, openai)")
 
 
 def offer_text(title: str, skills: list[str], description: str) -> str:

@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -39,7 +40,44 @@ def main() -> None:
     ps.add_argument("--embedder", default=None)
     ps.add_argument("-n", type=int, default=10)
     ps.add_argument("--all", action="store_true", help="include offers that look closed")
+    pn = sub.add_parser("snapshot", help="export open offers (derived fields and vectors, no ad text) for the demo")
+    pn.add_argument("out", type=Path)
+    pn.add_argument("--extractor", default="claude-cli:haiku")
+    pq = sub.add_parser("ask", help="ask the agent a question; it answers by calling the search tools")
+    pq.add_argument("question")
+    pq.add_argument("--provider", default=None, help="claude-cli (default, via MCP), gemini, openai, local")
+    pq.add_argument("--model", default=None)
+    sub.add_parser("mcp", help="run the MCP server over stdio")
+    pv = sub.add_parser("serve", help="run the HTTP API and demo page")
+    pv.add_argument("--port", type=int, default=8080)
     a = p.parse_args()
+
+    if a.cmd == "mcp":
+        from job_matcher import mcp_server
+
+        return mcp_server.main()
+    if a.cmd == "serve":
+        import uvicorn
+
+        return uvicorn.run("job_matcher.api:create_app", factory=True, host="127.0.0.1", port=a.port)
+    if a.cmd == "ask":
+        from job_matcher import agent
+        from job_matcher.llm import ChatModel, load_dotenv
+
+        load_dotenv()
+        provider = a.provider or os.environ.get("JM_LLM", "claude-cli")
+        t0 = time.time()
+        if provider == "claude-cli":
+            answer, cost = agent.run_claude_cli(a.question, a.model or "haiku")
+            note = f"API-equivalent ${cost:.3f}"
+        else:
+            from job_matcher.tools import toolbox_from_env
+
+            m = ChatModel(provider, a.model)
+            answer = agent.run(a.question, toolbox_from_env(), m)
+            note = f"{m.usage.calls} model calls, {m.usage.input_tokens} input + {m.usage.output_tokens} output tokens"
+        print("\n" + answer + f"\n\n({time.time() - t0:.0f}s, {note})")
+        return
 
     conn = db.connect()
     if a.cmd == "init":
@@ -89,6 +127,14 @@ def main() -> None:
               + (f", API-equivalent ${u.api_equivalent_usd:.2f}" if u.api_equivalent_usd else ""))
         if a.out:
             a.out.write_text(md)
+    elif a.cmd == "snapshot":
+        from datetime import date
+
+        from job_matcher.catalog import Catalog
+
+        cat = Catalog.from_db(conn, a.extractor)
+        cat.save(a.out, date.today().isoformat())
+        print(f"wrote {len(cat.cards)} open offers to {a.out}")
     elif a.cmd == "search":
         query = a.cv.read_text() if a.cv else a.query
         if not query:

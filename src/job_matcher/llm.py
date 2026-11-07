@@ -1,8 +1,9 @@
 """Chat models behind one interface, through the OpenAI SDK.
 
 Any OpenAI-compatible endpoint works by changing base_url: OpenAI itself, Azure OpenAI, Gemini's
-compatibility endpoint, or a local server (Ollama, vLLM). The default here is Gemini's free tier with
-a pool of keys rotated on rate limits, so the whole project runs at no cost.
+compatibility endpoint, or a local server (Ollama, vLLM). The default runs Claude Haiku through the
+`claude` CLI on the user's own subscription; Gemini's free tier with a pool of keys is the other option
+at no cost.
 
 Configuration (environment or .env):
   JM_LLM            claude-cli (default) | gemini | openai | local
@@ -131,6 +132,27 @@ class ChatModel:
                 return schema.model_validate(d["structured_output"])
             except (subprocess.SubprocessError, ValueError, json.JSONDecodeError) as e:
                 last = e
+        raise RuntimeError(f"{self.name} failed after {attempts} attempts: {last}")
+
+    def chat(self, messages: list[dict], tools: list[dict], attempts: int = 8):
+        """One chat turn with function calling; returns the assistant message. OpenAI-compatible providers
+        only: the claude-cli provider gets its tools over MCP instead (see agent.py)."""
+        if self.provider == "claude-cli":
+            raise ValueError("claude-cli runs tools over MCP; use agent.run_claude_cli")
+        last: Exception | None = None
+        for _ in range(attempts):
+            i = self._acquire()
+            try:
+                resp = self.clients[i].chat.completions.create(model=self.model, messages=messages, tools=tools,
+                                                               temperature=0)
+                self.usage.add(resp.usage)
+                return resp.choices[0].message
+            except (openai.RateLimitError, openai.PermissionDeniedError) as e:
+                last = e
+                self._rest(i)
+            except (openai.APIConnectionError, openai.InternalServerError, openai.APITimeoutError) as e:
+                last = e
+                self._rest(i, 10)
         raise RuntimeError(f"{self.name} failed after {attempts} attempts: {last}")
 
     def parse(self, system: str, user: str, schema: type[T], attempts: int = 8) -> T:

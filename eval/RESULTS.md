@@ -179,9 +179,25 @@ plausible, so the two signals were close in strength and complemented each other
 offers the retrieval order below the top is noisy and fusing it back in dilutes the scorer. The ranking
 in the product is therefore: gate, retrieval cut at 300, then the score.
 
+## Round 5: int8 query embeddings on the CPU
+
+The deployed demo has no GPU and no room for torch, so it embeds queries with an int8 ONNX build of
+bge-m3 (`Xenova/bge-m3`, 568 MB) through onnxruntime. Ad vectors stay the fp32 ones from the GPU. The
+check is `eval/onnx_check.py`, run over 1,800 offers (268 more than the rounds above, so the fp32 row
+differs from round 4).
+
+| query vectors | R@100 | R@200 | nDCG@100 | MRR |
+|---|---|---|---|---|
+| fp32, sentence-transformers on the GPU | 0.271 | 0.479 | 0.211 | 0.143 |
+| int8, onnxruntime on the CPU | 0.281 | 0.490 | 0.230 | 0.250 |
+
+Cosine similarity between the fp32 and int8 vector of the same query was 0.97 to 0.98 for six short
+queries and two CVs. For the six short queries, 8 to 10 of the top 10 offers were the same. The int8 row
+is a little higher, but with 96 labels that gap is noise. The ranking holds. On 16 CPU cores an int8 query
+took 0.07 s, and the container uses about 1.1 GB of memory.
+
 ## Next
 
 - Recall for the funnel: union of CV-vector and keyword candidates at a fixed budget (100, 200, 300).
-- A ranking command (`jm rank`) that runs the chosen funnel on new offers and prints a short list with reasons.
-- Agent with tools and an MCP server over the database.
-- FastAPI + web page with precomputed results and live vector search; Docker; Azure and AWS with Terraform.
+- New labels: offers fetched after the evaluation, marked by the candidate, to test prompt v2 on data it
+  was not written against.

@@ -1,7 +1,7 @@
 [project]
 name = "job-matcher"
 version = "0.1.0"
-description = "Hybrid search, LLM extraction and a tool-using agent over job offers, with an evaluation on real application decisions"
+description = "Vector search, LLM extraction and scoring, an agent and an MCP server over job offers, evaluated on real application decisions"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
@@ -10,6 +10,12 @@ dependencies = [
   "pyyaml>=6",
   "openai>=1.60",
   "pydantic>=2",
+  "onnxruntime>=1.31.1",
+  "tokenizers>=0.23.3",
+  "numpy>=2.5.4",
+  "mcp>=1.2",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
 ]
 
 [project.scripts]

@@ -2,7 +2,8 @@
 
 Ranks job offers against one candidate and measures whether the ranking is right. It runs on offers from
 Polish job boards and company career pages, with Postgres and pgvector for storage and search, and an LLM
-for reading ads and judging fit.
+for reading ads and judging fit. An agent, an MCP server and an HTTP API expose the same search tools, and
+Terraform deploys the API to Azure and AWS.
 
 Most tools in this space give each offer a score. This one also checks the scores against the
 candidate's real decisions: 96 offers from one job search, graded by how far each got (shortlisted,
@@ -45,6 +46,62 @@ them out. The full write-up, with the experiments that did not work, is in
 Each step stores its result in Postgres and only processes offers it has not seen, so a daily run costs
 calls for the new offers only.
 
+## Agent, MCP server and API
+
+The same four tools (`search_offers`, `get_offer`, `skill_demand`, `catalog_info`) are defined once in
+`tools.py` and served three ways:
+
+- **Agent.** `jm ask "..."` answers a question by calling the tools. With an OpenAI-compatible provider it
+  runs a function-calling loop written in `agent.py`. With `claude-cli` it runs Claude Code in headless
+  mode with the MCP server as its only tools.
+- **MCP server.** `jm mcp` serves the tools over stdio to any MCP client, for example
+  `claude mcp add jobs -- uv run --directory /path/to/job-matcher jm mcp`.
+- **HTTP API.** `jm serve` runs FastAPI with a search page, `/api/search`, `/api/offers/{id}`,
+  `/api/skills`, OpenAPI docs at `/api/docs`, and the MCP server over streamable HTTP at `/mcp`.
+
+```text
+$ uv run jm ask "Find junior or intern AI/ML roles in Kraków or remote. Which 3 look best for a Python
+  developer with RAG and embeddings projects, and what skills do they ask for most?"
+  -> search_offers({"query": "Python developer junior AI ML engineer RAG ...", "cities": ["Kraków"], ...})
+  -> skill_demand({"cities": ["Kraków"], "max_seniority": "junior", "role_families": ["ml_ai"], "top": 20})
+  -> get_offer({"offer_id": "justjoin:c104632e-..."})
+  ...
+(18s, API-equivalent $0.005)
+```
+
+Search runs the gate after the vector ranking and reports how many offers each filter removed, so the
+agent can say "nothing junior in Gdańsk" instead of returning senior roles.
+
+## Deployment
+
+The demo serves a snapshot instead of the database: `jm snapshot` exports the open offers' derived fields
+(title, company, link, location, extracted level, years and skills) and their vectors. The snapshot holds
+no ad text and no scores against anyone's CV. No language model runs in the deployed service. The query
+is embedded with an int8 build of bge-m3 on the CPU, which keeps the ranking of the GPU model
+([round 5](eval/RESULTS.md#round-5-int8-query-embeddings-on-the-cpu)).
+
+One container image runs on both clouds:
+
+| | Azure | AWS |
+|---|---|---|
+| compute | Container Apps, scale to zero, at most 1 replica | Lambda with a function URL, 2 GB, reserved concurrency 2 |
+| image | public on GHCR | ECR, two newest images kept |
+| HTTP | the container's port 8080 | Lambda Web Adapter extension forwards to the same port |
+| cost guard | $1 monthly budget with email alerts | $1 monthly budget with email alerts |
+
+The API also limits requests per address and in total, a cap on the bill if someone floods the
+endpoint.
+
+```bash
+./deploy/push.sh ghcr 2026-11-07                      # snapshot, build, push to GHCR
+terraform -chdir=deploy/azure apply -var image=ghcr.io/<user>/job-matcher-demo:2026-11-07 \
+  -var subscription_id=... -var budget_email=...
+
+terraform -chdir=deploy/aws apply -target=aws_ecr_repository.repo -var budget_email=...
+./deploy/push.sh aws 2026-11-07
+terraform -chdir=deploy/aws apply -var image_tag=2026-11-07 -var budget_email=...
+```
+
 ## Models
 
 All chat models sit behind one interface with Pydantic-validated structured output.
@@ -78,7 +135,9 @@ requirement "met". Optional `--coursework` quotes count as "partial" at most, an
 `--excluded` count as "missing".
 
 Other commands: `jm search "junior python fastapi"` for search alone, `jm extract` for extraction alone,
-and `jm stats` for counts.
+`jm stats` for counts, and `jm ask`, `jm mcp`, `jm serve`, `jm snapshot` from the sections above. The
+agent, MCP server and API embed queries with the int8 ONNX model; download `model_int8.onnx` and
+`tokenizer.json` from `Xenova/bge-m3` into `~/.cache/jm-models/bge-m3-int8` (or set `JM_ONNX_DIR`).
 
 ## Evaluation
 
@@ -100,6 +159,7 @@ ad texts. The repository holds the code and aggregate results.
 - The scoring prompt v2 was written after looking at the evaluation pool, so its numbers there are
   optimistic. New labelled offers are the real test.
 - Full text has no Polish stemmer in Postgres, so it uses the `simple` configuration.
+- The demo serves a snapshot. Offers that close after it was taken stay in it until the next push.
 
 ## License
 
