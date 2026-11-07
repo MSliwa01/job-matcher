@@ -1,0 +1,11 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: jm
+      POSTGRES_PASSWORD: jm
+      POSTGRES_DB: jobs
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:

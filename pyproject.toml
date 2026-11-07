@@ -1,0 +1,18 @@
+[project]
+name = "job-matcher"
+version = "0.1.0"
+description = "Hybrid search, LLM extraction and a tool-using agent over job offers, with an evaluation on real application decisions"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+  "psycopg[binary]>=3.2",
+  "pgvector>=0.3",
+  "pyyaml>=6",
+]
+
+[project.scripts]
+jm = "job_matcher.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
